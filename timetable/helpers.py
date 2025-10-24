@@ -6,9 +6,9 @@ from datetime import datetime
 def nursing_exam_timetable_parser(file):
 
     # Define the list of column headers
-    column_headers = ['Day', 'Campus', 'Coordinator', 'Courses', 'Hours', 
-                      'Venue', 'Invigilators', 'Courses_Afternoon', 
-                      'Hours_Afternoon', 'Invigilators_Afternoon', 
+    column_headers = ['Day', 'Campus', 'Coordinator', 'Courses', 'Hours',
+                      'Venue', 'Invigilators', 'Courses_Afternoon',
+                      'Hours_Afternoon', 'Invigilators_Afternoon',
                       'Venue_Afternoon']
 
     def extract_course_info(column_data_dict, time_key, time_range):
@@ -27,7 +27,7 @@ def nursing_exam_timetable_parser(file):
                     "venue": column_data_dict[f"Venue{'_Afternoon' if '_Afternoon' in time_key else ''}"][i],
                     "invigilator": column_data_dict[f"Invigilators{'_Afternoon' if '_Afternoon' in time_key else ''}"][i]
                 }
-                
+
                 courses.append(course_info)
                 existing_course_codes.add(course_code)
         return courses
@@ -81,7 +81,7 @@ def parse_nursing_timetable(file_path):
     }
 
     days_of_the_week = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]
-    unnecessary_course_values = ["CHAPEL", "CLP", "SDL", "KEY", 
+    unnecessary_course_values = ["CHAPEL", "CLP", "SDL", "KEY",
                                 "CLP-CLINICAL PRACTICE",
                                 "SDL- SELF DIRECTED LEARNING"]
 
@@ -103,7 +103,7 @@ def parse_nursing_timetable(file_path):
             continue
 
         # concantenating course name and the lecturer
-        course_lectures[row[1]] = [row[2] , row[3]] 
+        course_lectures[row[1]] = [row[2] , row[3]]
 
      # getting info from from second worksheet
     second_work_sheet = wb_obj[work_sheets[1]]
@@ -154,7 +154,7 @@ def parse_nursing_timetable(file_path):
 
             # concatenating start time and end time
             course_time = start_time + "-" + time_dictionary[f"{rem_idx}"][1]
-            
+
             courses.append({
                 "course_code": course_name[:7].strip().replace(" ", ""),
                 "lecturer": course_lectures[course_name[:7].strip()][1],
@@ -163,11 +163,11 @@ def parse_nursing_timetable(file_path):
                 "venue":venue,
                 "time":course_time
                 })
-            
+
     return courses
 
 def parse_school_exam_timetable(file):
-    def time_difference(start_time, end_time): 
+    def time_difference(start_time, end_time):
         """
         Returns the difference in hrs between two
         time intervals
@@ -245,3 +245,107 @@ def parse_school_exam_timetable(file):
                         }
                     )
     return courses
+
+def strath_extractor(file):
+    """
+    Extracts TT data for Strathmore University
+    """
+
+    def format_strath_time(time):
+        """
+        converts format (8:00-10:00) to (8:00AM-10:00AM)
+        """
+        if not time or "-" not in time:
+            return time
+
+        start_time, end_time = time.split("-", 1)
+        start_time = start_time.strip()
+        end_time = end_time.strip()
+
+        def convert_to_12hour(time_24):
+            if ":" in time_24:
+                hour, minute = time_24.split(":")
+                hour = int(hour)
+                if hour == 0:
+                    return f"12:{minute}AM"
+                elif hour < 12:
+                    return f"{hour}:{minute}AM"
+                elif hour == 12:
+                    return f"12:{minute}PM"
+                else:
+                    return f"{hour-12}:{minute}PM"
+            return time_24
+
+        formatted_start_time = convert_to_12hour(start_time)
+        formatted_end_time = convert_to_12hour(end_time)
+
+        return f"{formatted_start_time}-{formatted_end_time}"
+
+    web_obj = load_workbook(file)
+    sheet = web_obj.active
+
+    # Variables to track merged cells
+    current_date = ""
+    current_time = ""
+    current_course = ""
+    current_group = ""
+    current_number = ""
+    current_venue = ""
+    current_lecturer = ""
+
+    course = []
+
+    for row_idx, row in enumerate(sheet.iter_rows(values_only=True)):
+        # Skip header rows (assuming first 3 rows are intro/header)
+        if row_idx < 3:
+            continue
+
+        date_val = row[0] if len(row) > 0 else None
+        time_val = row[2] if len(row) > 2 else None
+        course_val = row[4] if len(row) > 4 else None
+        group_val = row[6] if len(row) > 6 else None
+        number_val = row[7] if len(row) > 7 else None
+        venue_val = row[8] if len(row) > 8 else None
+        lecturer_val = row[10] if len(row) > 10 else None
+
+        # Handle merged cells - update current values when new data is found
+        if date_val and str(date_val).strip():
+            current_date = str(date_val).strip().rstrip('.')
+        if time_val and str(time_val).strip():
+            current_time = str(time_val).strip()
+        if course_val and str(course_val).strip():
+            current_course = str(course_val).strip()
+        if group_val and str(group_val).strip():
+            current_group = str(group_val).strip()
+        if number_val is not None:  # Allow 0 as valid
+            current_number = str(number_val).strip()
+        if venue_val and str(venue_val).strip():
+            current_venue = str(venue_val).strip()
+        if lecturer_val and str(lecturer_val).strip():
+            current_lecturer = str(lecturer_val).strip()
+
+        # Append if there's a new group or a new venue (for split venues)
+        if current_course and current_group and current_venue:
+            if (group_val and str(group_val).strip()) or (venue_val and str(venue_val).strip()):
+                # Split course code and name
+                course_parts = current_course.split(":", 1)
+                course_code = course_parts[0].strip() if course_parts else current_course
+                course_name = course_parts[1].strip() if len(course_parts) > 1 else ""
+
+                # Format time to match existing pattern
+                formatted_time = format_strath_time(current_time)
+
+                course_info = {
+                    "course_code": course_code,
+                    "course_name": course_name,
+                    "day": current_date,
+                    "time": formatted_time,
+                    "venue": current_venue,
+                    "lecturer": current_lecturer,
+                    "group": current_group,
+                    "student_count": current_number,
+                    "program": current_group.split()[0] if current_group else "",
+                }
+                course.append(course_info)
+
+    return course
