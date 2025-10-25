@@ -1,6 +1,7 @@
 # contains helper functions
 from openpyxl import load_workbook
 from datetime import datetime
+import re
 
 # parses nursing exam timetable
 def nursing_exam_timetable_parser(file):
@@ -349,3 +350,150 @@ def strath_extractor(file):
                 course.append(course_info)
 
     return course
+
+def kca_extractor(file):
+    """
+    Extracts TT data for KCA University
+    KCA uses different formats for different timetables.
+    """
+
+    def format_time(time_str):
+        """
+        Standardizes various time formats to (8:00AM-10:00AM)
+        Resulted to using simple regex to handle the different formats in different timetables.
+        """
+        if not time_str:
+            return ""
+
+        # Normalize: remove "HR"/"HRS", handle dots/spaces/AM/PM
+        clean_time = re.sub(r'(HR|HRS)', '', time_str.upper()).strip()
+        clean_time = re.sub(r'\s*-\s*', '-', clean_time)
+
+        # Match patterns like "8.30am-10.30am", "0800-1000", "8am-10am", "5pm-7pm"
+        match = re.match(r'(\d{1,2}(?:\.\d{2})?)([AP]M)?-(\d{1,2}(?:\.\d{2})?)([AP]M)?', clean_time)
+        if not match:
+            return time_str
+
+        start_hour, start_ampm, end_hour, end_ampm = match.groups()
+        start_hour = start_hour.replace('.', ':')
+        end_hour = end_hour.replace('.', ':')
+
+        # ("8am" -> "8:00AM")
+        if ':' not in start_hour:
+            start_hour += ':00'
+        if ':' not in end_hour:
+            end_hour += ':00'
+
+        # Handle AM/PM or infer from 24h format
+        def to_12hour(hour_min, ampm=None):
+            hour, minute = map(int, hour_min.split(':'))
+            if ampm is None:
+                if hour >= 12:
+                    ampm = 'PM'
+                    hour = hour - 12 if hour > 12 else hour
+                else:
+                    ampm = 'AM'
+            return f"{hour}:{minute:02d}{ampm}"
+
+        formatted_start = to_12hour(start_hour, start_ampm)
+        formatted_end = to_12hour(end_hour, end_ampm or start_ampm)
+
+        return f"{formatted_start}-{formatted_end}"
+
+    def convert_date(date_val):
+        """Convert Excel serial or string to readable date
+           from (Monday, 1st January 2025) to (2025-01-01)
+        """
+        if isinstance(date_val, (int, float)):
+            try:
+                return datetime.fromordinal(datetime(1900, 1, 1).toordinal() + int(date_val) - 2).strftime('%Y-%m-%d')
+            except ValueError:
+                return str(date_val)
+        return str(date_val).strip()
+
+    wb_obj = load_workbook(file)
+    sheet = wb_obj.active
+
+    # Find header row
+    header_row = None
+    for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+        if any('UNIT CODE' in str(cell).upper() for cell in row if cell):
+            header_row = list(map(str, row))
+            header_idx = row_idx
+            break
+    if not header_row:
+        return []
+
+    # Normalize headers
+    norm_headers = {h.upper().strip().replace(' ', '_'): idx for idx, h in enumerate(header_row) if h}
+
+    key_map = {
+        "SESSION": "SESSION",
+        "DATE": "DATE",
+        "TIME": "TIME",
+        "ROOM": "ROOM|VENUE",
+        "UNIT_CODE": "UNIT_CODE|UNIT CODE",
+        "UNIT_NAME": "UNIT_NAME|UNIT NAME",
+        "PRINCIPAL_INVIGILATOR": "PRINCIPAL_INVIGILATORS|PRINCIPAL INVIGILATORS - MAIN|PRINCIPAL INVIGILATORS (MAIN)|INVIGILATOR OF THE SESSION",
+        "SUPPORT_INVIGILATOR": "SUPPORT_INVIGILATORS|ADDITIONAL_INVIGILATORS_MAIN|OTHER INVIGILATORS (MAIN)",
+        "STUDENT_COUNT": "COUNTER|COUNT",
+        "PROGRAM": "PROGRAM_NAME|PROG",
+        "MODE_OF_STUDY": "MODE_OF_STUDY",
+        "SCHOOL": "SCHOOL",
+        "DEPARTMENT": "DEPARTMENT",
+        "TRIMESTER": "TRIMESTER",
+        "CAMPUS": "CAMPUS",
+        "SESSION_LEADER": "SESSION_LEADER",
+        "REMARKS": "REMARKS",
+    }
+
+    courses = []
+    current_entry = None
+
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=header_idx + 1, values_only=True), start=header_idx + 1):
+        row = list(map(lambda x: x if x is not None else "", row))
+
+        unit_code = ""
+        for pattern in key_map["UNIT_CODE"].split('|'):
+            if pattern in norm_headers:
+                unit_code = str(row[norm_headers[pattern]]).strip()
+                break
+
+        if unit_code:
+            if current_entry:
+                courses.append(current_entry)
+            current_entry = {"course_code": unit_code}
+            for out_key, patterns in key_map.items():
+                for pattern in patterns.split('|'):
+                    if pattern in norm_headers:
+                        val = row[norm_headers[pattern]]
+                        if out_key == "DATE":
+                            val = convert_date(val)
+                        elif out_key == "TIME":
+                            val = format_time(str(val))
+                        current_entry[out_key.lower()] = str(val).strip()
+                        break
+                if out_key.lower() not in current_entry:
+                    current_entry[out_key.lower()] = ""
+            current_entry["program"] = [current_entry["program"]] if current_entry["program"] else []
+            current_entry["venue"] = current_entry.pop("room", "")
+        elif current_entry:
+            for out_key, patterns in key_map.items():
+                for pattern in patterns.split('|'):
+                    if pattern in norm_headers:
+                        val = str(row[norm_headers[pattern]]).strip()
+                        if val and out_key.lower() in ["program", "venue", "principal_invigilator", "support_invigilator"]:
+                            if not isinstance(current_entry[out_key.lower()], list):
+                                current_entry[out_key.lower()] = [current_entry[out_key.lower()]]
+                            current_entry[out_key.lower()].append(val)
+                        break
+
+    if current_entry:
+        courses.append(current_entry)
+
+    for course in courses:
+        for key in ["program", "venue", "principal_invigilator", "support_invigilator"]:
+            if isinstance(course[key], list):
+                course[key] = ", ".join(set(filter(None, course[key])))
+
+    return courses
