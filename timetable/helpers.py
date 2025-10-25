@@ -354,13 +354,12 @@ def strath_extractor(file):
 def kca_extractor(file):
     """
     Extracts TT data for KCA University
-    KCA uses different formats for different timetables.
+    Resulted to using simple regex to handle the different formats in different timetables.
     """
 
     def format_time(time_str):
         """
         Standardizes various time formats to (8:00AM-10:00AM)
-        Resulted to using simple regex to handle the different formats in different timetables.
         """
         if not time_str:
             return ""
@@ -378,7 +377,7 @@ def kca_extractor(file):
         start_hour = start_hour.replace('.', ':')
         end_hour = end_hour.replace('.', ':')
 
-        # ("8am" -> "8:00AM")
+        # Ensure minutes if missing
         if ':' not in start_hour:
             start_hour += ':00'
         if ':' not in end_hour:
@@ -402,7 +401,7 @@ def kca_extractor(file):
 
     def convert_date(date_val):
         """Convert Excel serial or string to readable date
-           from (Monday, 1st January 2025) to (2025-01-01)
+        from (Monday, 1st January 2025) to (2025-01-01)
         """
         if isinstance(date_val, (int, float)):
             try:
@@ -411,7 +410,20 @@ def kca_extractor(file):
                 return str(date_val)
         return str(date_val).strip()
 
-    wb_obj = load_workbook(file)
+    def compute_session_from_time(formatted_time):
+        """Map formatted time to session number"""
+        if formatted_time == "8:00AM-10:00AM":
+            return "1"
+        elif formatted_time == "11:00AM-1:00PM":
+            return "2"
+        elif formatted_time == "2:00PM-4:00PM":
+            return "3"
+        elif formatted_time == "5:00PM-7:00PM":
+            return "4"
+        else:
+            return ""
+
+    wb_obj = load_workbook(file, data_only=True)
     sheet = wb_obj.active
 
     # Find header row
@@ -440,7 +452,7 @@ def kca_extractor(file):
         "PROGRAM": "PROGRAM_NAME|PROG",
         "MODE_OF_STUDY": "MODE_OF_STUDY",
         "SCHOOL": "SCHOOL",
-        "DEPARTMENT": "DEPARTMENT",
+        "DEPARTMENT": "DEPARTMENT|DEPARMENT",
         "TRIMESTER": "TRIMESTER",
         "CAMPUS": "CAMPUS",
         "SESSION_LEADER": "SESSION_LEADER",
@@ -463,6 +475,7 @@ def kca_extractor(file):
             if current_entry:
                 courses.append(current_entry)
             current_entry = {"course_code": unit_code}
+            raw_time = ""
             for out_key, patterns in key_map.items():
                 for pattern in patterns.split('|'):
                     if pattern in norm_headers:
@@ -470,13 +483,19 @@ def kca_extractor(file):
                         if out_key == "DATE":
                             val = convert_date(val)
                         elif out_key == "TIME":
-                            val = format_time(str(val))
+                            raw_time = str(val)
+                            val = format_time(raw_time)
                         current_entry[out_key.lower()] = str(val).strip()
                         break
                 if out_key.lower() not in current_entry:
                     current_entry[out_key.lower()] = ""
             current_entry["program"] = [current_entry["program"]] if current_entry["program"] else []
             current_entry["venue"] = current_entry.pop("room", "")
+
+            # Handle formula in session
+            if current_entry["session"].startswith('=IF'):
+                current_entry["session"] = compute_session_from_time(current_entry["time"])
+
         elif current_entry:
             for out_key, patterns in key_map.items():
                 for pattern in patterns.split('|'):
@@ -494,6 +513,6 @@ def kca_extractor(file):
     for course in courses:
         for key in ["program", "venue", "principal_invigilator", "support_invigilator"]:
             if isinstance(course[key], list):
-                course[key] = ", ".join(set(filter(None, course[key])))
+                course[key] = ", ".join(set(filter(None, course[key])))  # Unique non-empty
 
     return courses
