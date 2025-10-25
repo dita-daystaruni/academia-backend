@@ -1,14 +1,15 @@
 # contains helper functions
 from openpyxl import load_workbook
 from datetime import datetime
+import re
 
 # parses nursing exam timetable
 def nursing_exam_timetable_parser(file):
 
     # Define the list of column headers
-    column_headers = ['Day', 'Campus', 'Coordinator', 'Courses', 'Hours', 
-                      'Venue', 'Invigilators', 'Courses_Afternoon', 
-                      'Hours_Afternoon', 'Invigilators_Afternoon', 
+    column_headers = ['Day', 'Campus', 'Coordinator', 'Courses', 'Hours',
+                      'Venue', 'Invigilators', 'Courses_Afternoon',
+                      'Hours_Afternoon', 'Invigilators_Afternoon',
                       'Venue_Afternoon']
 
     def extract_course_info(column_data_dict, time_key, time_range):
@@ -27,7 +28,7 @@ def nursing_exam_timetable_parser(file):
                     "venue": column_data_dict[f"Venue{'_Afternoon' if '_Afternoon' in time_key else ''}"][i],
                     "invigilator": column_data_dict[f"Invigilators{'_Afternoon' if '_Afternoon' in time_key else ''}"][i]
                 }
-                
+
                 courses.append(course_info)
                 existing_course_codes.add(course_code)
         return courses
@@ -81,7 +82,7 @@ def parse_nursing_timetable(file_path):
     }
 
     days_of_the_week = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]
-    unnecessary_course_values = ["CHAPEL", "CLP", "SDL", "KEY", 
+    unnecessary_course_values = ["CHAPEL", "CLP", "SDL", "KEY",
                                 "CLP-CLINICAL PRACTICE",
                                 "SDL- SELF DIRECTED LEARNING"]
 
@@ -103,7 +104,7 @@ def parse_nursing_timetable(file_path):
             continue
 
         # concantenating course name and the lecturer
-        course_lectures[row[1]] = [row[2] , row[3]] 
+        course_lectures[row[1]] = [row[2] , row[3]]
 
      # getting info from from second worksheet
     second_work_sheet = wb_obj[work_sheets[1]]
@@ -154,7 +155,7 @@ def parse_nursing_timetable(file_path):
 
             # concatenating start time and end time
             course_time = start_time + "-" + time_dictionary[f"{rem_idx}"][1]
-            
+
             courses.append({
                 "course_code": course_name[:7].strip().replace(" ", ""),
                 "lecturer": course_lectures[course_name[:7].strip()][1],
@@ -163,11 +164,11 @@ def parse_nursing_timetable(file_path):
                 "venue":venue,
                 "time":course_time
                 })
-            
+
     return courses
 
 def parse_school_exam_timetable(file):
-    def time_difference(start_time, end_time): 
+    def time_difference(start_time, end_time):
         """
         Returns the difference in hrs between two
         time intervals
@@ -244,4 +245,274 @@ def parse_school_exam_timetable(file):
                             "hrs": "2" if hours[0] == "-" else hours[0],
                         }
                     )
+    return courses
+
+def strath_extractor(file):
+    """
+    Extracts TT data for Strathmore University
+    """
+
+    def format_strath_time(time):
+        """
+        converts format (8:00-10:00) to (8:00AM-10:00AM)
+        """
+        if not time or "-" not in time:
+            return time
+
+        start_time, end_time = time.split("-", 1)
+        start_time = start_time.strip()
+        end_time = end_time.strip()
+
+        def convert_to_12hour(time_24):
+            if ":" in time_24:
+                hour, minute = time_24.split(":")
+                hour = int(hour)
+                if hour == 0:
+                    return f"12:{minute}AM"
+                elif hour < 12:
+                    return f"{hour}:{minute}AM"
+                elif hour == 12:
+                    return f"12:{minute}PM"
+                else:
+                    return f"{hour-12}:{minute}PM"
+            return time_24
+
+        formatted_start_time = convert_to_12hour(start_time)
+        formatted_end_time = convert_to_12hour(end_time)
+
+        return f"{formatted_start_time}-{formatted_end_time}"
+
+    web_obj = load_workbook(file)
+    sheet = web_obj.active
+
+    # Variables to track merged cells
+    current_date = ""
+    current_time = ""
+    current_course = ""
+    current_group = ""
+    current_number = ""
+    current_venue = ""
+    current_lecturer = ""
+
+    course = []
+
+    for row_idx, row in enumerate(sheet.iter_rows(values_only=True)):
+        # Skip header rows (assuming first 3 rows are intro/header)
+        if row_idx < 3:
+            continue
+
+        date_val = row[0] if len(row) > 0 else None
+        time_val = row[2] if len(row) > 2 else None
+        course_val = row[4] if len(row) > 4 else None
+        group_val = row[6] if len(row) > 6 else None
+        number_val = row[7] if len(row) > 7 else None
+        venue_val = row[8] if len(row) > 8 else None
+        lecturer_val = row[10] if len(row) > 10 else None
+
+        # Handle merged cells - update current values when new data is found
+        if date_val and str(date_val).strip():
+            current_date = str(date_val).strip().rstrip('.')
+        if time_val and str(time_val).strip():
+            current_time = str(time_val).strip()
+        if course_val and str(course_val).strip():
+            current_course = str(course_val).strip()
+        if group_val and str(group_val).strip():
+            current_group = str(group_val).strip()
+        if number_val is not None:  # Allow 0 as valid
+            current_number = str(number_val).strip()
+        if venue_val and str(venue_val).strip():
+            current_venue = str(venue_val).strip()
+        if lecturer_val and str(lecturer_val).strip():
+            current_lecturer = str(lecturer_val).strip()
+
+        # Append if there's a new group or a new venue (for split venues)
+        if current_course and current_group and current_venue:
+            if (group_val and str(group_val).strip()) or (venue_val and str(venue_val).strip()):
+                # Split course code and name
+                course_parts = current_course.split(":", 1)
+                course_code = course_parts[0].strip() if course_parts else current_course
+                course_name = course_parts[1].strip() if len(course_parts) > 1 else ""
+
+                # Format time to match existing pattern
+                formatted_time = format_strath_time(current_time)
+
+                course_info = {
+                    "course_code": course_code,
+                    "course_name": course_name,
+                    "day": current_date,
+                    "time": formatted_time,
+                    "venue": current_venue,
+                    "lecturer": current_lecturer,
+                    "group": current_group,
+                    "student_count": current_number,
+                    "program": current_group.split()[0] if current_group else "",
+                }
+                course.append(course_info)
+
+    return course
+
+def kca_extractor(file):
+    """
+    Extracts TT data for KCA University
+    Resulted to using simple regex to handle the different formats in different timetables.
+    """
+
+    def format_time(time_str):
+        """
+        Standardizes various time formats to (8:00AM-10:00AM)
+        """
+        if not time_str:
+            return ""
+
+        # Normalize: remove "HR"/"HRS", handle dots/spaces/AM/PM
+        clean_time = re.sub(r'(HR|HRS)', '', time_str.upper()).strip()
+        clean_time = re.sub(r'\s*-\s*', '-', clean_time)
+
+        # Match patterns like "8.30am-10.30am", "0800-1000", "8am-10am", "5pm-7pm"
+        match = re.match(r'(\d{1,2}(?:\.\d{2})?)([AP]M)?-(\d{1,2}(?:\.\d{2})?)([AP]M)?', clean_time)
+        if not match:
+            return time_str
+
+        start_hour, start_ampm, end_hour, end_ampm = match.groups()
+        start_hour = start_hour.replace('.', ':')
+        end_hour = end_hour.replace('.', ':')
+
+        # Ensure minutes if missing
+        if ':' not in start_hour:
+            start_hour += ':00'
+        if ':' not in end_hour:
+            end_hour += ':00'
+
+        # Handle AM/PM or infer from 24h format
+        def to_12hour(hour_min, ampm=None):
+            hour, minute = map(int, hour_min.split(':'))
+            if ampm is None:
+                if hour >= 12:
+                    ampm = 'PM'
+                    hour = hour - 12 if hour > 12 else hour
+                else:
+                    ampm = 'AM'
+            return f"{hour}:{minute:02d}{ampm}"
+
+        formatted_start = to_12hour(start_hour, start_ampm)
+        formatted_end = to_12hour(end_hour, end_ampm or start_ampm)
+
+        return f"{formatted_start}-{formatted_end}"
+
+    def convert_date(date_val):
+        """Convert Excel serial or string to readable date
+        from (Monday, 1st January 2025) to (2025-01-01)
+        """
+        if isinstance(date_val, (int, float)):
+            try:
+                return datetime.fromordinal(datetime(1900, 1, 1).toordinal() + int(date_val) - 2).strftime('%Y-%m-%d')
+            except ValueError:
+                return str(date_val)
+        return str(date_val).strip()
+
+    def compute_session_from_time(formatted_time):
+        """Map formatted time to session number"""
+        if formatted_time == "8:00AM-10:00AM":
+            return "1"
+        elif formatted_time == "11:00AM-1:00PM":
+            return "2"
+        elif formatted_time == "2:00PM-4:00PM":
+            return "3"
+        elif formatted_time == "5:00PM-7:00PM":
+            return "4"
+        else:
+            return ""
+
+    wb_obj = load_workbook(file, data_only=True)
+    sheet = wb_obj.active
+
+    # Find header row
+    header_row = None
+    for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+        if any('UNIT CODE' in str(cell).upper() for cell in row if cell):
+            header_row = list(map(str, row))
+            header_idx = row_idx
+            break
+    if not header_row:
+        return []
+
+    # Normalize headers
+    norm_headers = {h.upper().strip().replace(' ', '_'): idx for idx, h in enumerate(header_row) if h}
+
+    key_map = {
+        "SESSION": "SESSION",
+        "DATE": "DATE",
+        "TIME": "TIME",
+        "ROOM": "ROOM|VENUE",
+        "UNIT_CODE": "UNIT_CODE|UNIT CODE",
+        "UNIT_NAME": "UNIT_NAME|UNIT NAME",
+        "PRINCIPAL_INVIGILATOR": "PRINCIPAL_INVIGILATORS|PRINCIPAL INVIGILATORS - MAIN|PRINCIPAL INVIGILATORS (MAIN)|INVIGILATOR OF THE SESSION",
+        "SUPPORT_INVIGILATOR": "SUPPORT_INVIGILATORS|ADDITIONAL_INVIGILATORS_MAIN|OTHER INVIGILATORS (MAIN)",
+        "STUDENT_COUNT": "COUNTER|COUNT",
+        "PROGRAM": "PROGRAM_NAME|PROG",
+        "MODE_OF_STUDY": "MODE_OF_STUDY",
+        "SCHOOL": "SCHOOL",
+        "DEPARTMENT": "DEPARTMENT|DEPARMENT",
+        "TRIMESTER": "TRIMESTER",
+        "CAMPUS": "CAMPUS",
+        "SESSION_LEADER": "SESSION_LEADER",
+        "REMARKS": "REMARKS",
+    }
+
+    courses = []
+    current_entry = None
+
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=header_idx + 1, values_only=True), start=header_idx + 1):
+        row = list(map(lambda x: x if x is not None else "", row))
+
+        unit_code = ""
+        for pattern in key_map["UNIT_CODE"].split('|'):
+            if pattern in norm_headers:
+                unit_code = str(row[norm_headers[pattern]]).strip()
+                break
+
+        if unit_code:
+            if current_entry:
+                courses.append(current_entry)
+            current_entry = {"course_code": unit_code}
+            raw_time = ""
+            for out_key, patterns in key_map.items():
+                for pattern in patterns.split('|'):
+                    if pattern in norm_headers:
+                        val = row[norm_headers[pattern]]
+                        if out_key == "DATE":
+                            val = convert_date(val)
+                        elif out_key == "TIME":
+                            raw_time = str(val)
+                            val = format_time(raw_time)
+                        current_entry[out_key.lower()] = str(val).strip()
+                        break
+                if out_key.lower() not in current_entry:
+                    current_entry[out_key.lower()] = ""
+            current_entry["program"] = [current_entry["program"]] if current_entry["program"] else []
+            current_entry["venue"] = current_entry.pop("room", "")
+
+            # Handle formula in session
+            if current_entry["session"].startswith('=IF'):
+                current_entry["session"] = compute_session_from_time(current_entry["time"])
+
+        elif current_entry:
+            for out_key, patterns in key_map.items():
+                for pattern in patterns.split('|'):
+                    if pattern in norm_headers:
+                        val = str(row[norm_headers[pattern]]).strip()
+                        if val and out_key.lower() in ["program", "venue", "principal_invigilator", "support_invigilator"]:
+                            if not isinstance(current_entry[out_key.lower()], list):
+                                current_entry[out_key.lower()] = [current_entry[out_key.lower()]]
+                            current_entry[out_key.lower()].append(val)
+                        break
+
+    if current_entry:
+        courses.append(current_entry)
+
+    for course in courses:
+        for key in ["program", "venue", "principal_invigilator", "support_invigilator"]:
+            if isinstance(course[key], list):
+                course[key] = ", ".join(set(filter(None, course[key])))  # Unique non-empty
+
     return courses

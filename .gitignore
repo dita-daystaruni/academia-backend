@@ -1,6 +1,7 @@
 # upload folder
 uploads/
-
+*.json
+tests/*
 # xlx files
 *.xlsx
 *.xls
